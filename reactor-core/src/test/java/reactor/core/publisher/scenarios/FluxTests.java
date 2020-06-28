@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Timer;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Phaser;
@@ -52,15 +53,18 @@ import org.junit.Ignore;
 import org.junit.Test;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
 import reactor.core.Exceptions;
-import reactor.core.publisher.EmitterProcessor;
+import reactor.core.Fuseable;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.FluxProcessor;
+import reactor.core.publisher.FluxIdentityProcessor;
+import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoProcessor;
-import reactor.core.publisher.ReplayProcessor;
+import reactor.core.publisher.Operators;
+import reactor.core.publisher.Processors;
 import reactor.core.publisher.Signal;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -71,6 +75,7 @@ import reactor.util.Loggers;
 import reactor.util.function.Tuple2;
 import reactor.util.function.Tuples;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -321,9 +326,10 @@ public class FluxTests extends AbstractReactorTest {
 		await(5, s, is(15));
 	}
 
+	//FIXME what does this test ?
 	@Test
 	public void simpleReactiveSubscriber() throws InterruptedException {
-		EmitterProcessor<String> str = EmitterProcessor.create();
+		FluxIdentityProcessor<String> str = Processors.multicast();
 
 		str.publishOn(asyncGroup)
 		   .subscribe(new FooSubscriber());
@@ -525,7 +531,7 @@ public class FluxTests extends AbstractReactorTest {
 
 	@Test
 	public void analyticsTest() throws Exception {
-		ReplayProcessor<Integer> source = ReplayProcessor.create();
+		FluxIdentityProcessor<Integer> source = Processors.replayAll();
 
 		long avgTime = 50l;
 
@@ -572,7 +578,7 @@ public class FluxTests extends AbstractReactorTest {
 
 		final CountDownLatch latch = new CountDownLatch(iterations);
 
-		EmitterProcessor<String> deferred = EmitterProcessor.create();
+		FluxIdentityProcessor<String> deferred = Processors.multicast();
 		deferred.publishOn(asyncGroup)
 		        .parallel(8)
 		        .groups()
@@ -615,10 +621,10 @@ public class FluxTests extends AbstractReactorTest {
 
 		int[] data;
 		CountDownLatch latch = new CountDownLatch(iterations);
-		EmitterProcessor<Integer> deferred;
+		FluxIdentityProcessor<Integer> deferred;
 		switch (dispatcher) {
 			case "partitioned":
-				deferred = EmitterProcessor.create();
+				deferred = Processors.multicast();
 				deferred.publishOn(asyncGroup)
 				        .parallel(2)
 				        .groups()
@@ -630,7 +636,7 @@ public class FluxTests extends AbstractReactorTest {
 				break;
 
 			default:
-				deferred = EmitterProcessor.create();
+				deferred = Processors.multicast();
 				deferred.publishOn(asyncGroup)
 				        .map(i -> i)
 				        .scan(1, (acc, next) -> acc + next)
@@ -669,17 +675,17 @@ public class FluxTests extends AbstractReactorTest {
 
 		int[] data;
 		CountDownLatch latch = new CountDownLatch(iterations);
-		EmitterProcessor<Integer> mapManydeferred;
+		FluxIdentityProcessor<Integer> mapManydeferred;
 		switch (dispatcher) {
 			case "partitioned":
-				mapManydeferred = EmitterProcessor.create();
+				mapManydeferred = Processors.multicast();
 				mapManydeferred.parallel(4)
 				               .groups()
 				               .subscribe(substream -> substream.publishOn(asyncGroup)
 				                                              .subscribe(i -> latch.countDown()));
 				break;
 			default:
-				mapManydeferred = EmitterProcessor.create();
+				mapManydeferred = Processors.multicast();
 				("sync".equals(dispatcher) ? mapManydeferred : mapManydeferred.publishOn(asyncGroup))
 				               .flatMap(Flux::just)
 				               .subscribe(i -> latch.countDown());
@@ -756,7 +762,7 @@ public class FluxTests extends AbstractReactorTest {
 		 */
 		final double TOLERANCE = 0.9;
 
-		FluxProcessor<Integer, Integer> batchingStreamDef = EmitterProcessor.create();
+		FluxIdentityProcessor<Integer> batchingStreamDef = Processors.multicast();
 
 		List<Integer> testDataset = createTestDataset(NUM_MESSAGES);
 
@@ -848,7 +854,7 @@ public class FluxTests extends AbstractReactorTest {
 
 	@Test
 	public void shouldCorrectlyDispatchComplexFlow() throws InterruptedException {
-		EmitterProcessor<Integer> globalFeed = EmitterProcessor.create();
+		FluxIdentityProcessor<Integer> globalFeed = Processors.multicast();
 
 		CountDownLatch afterSubscribe = new CountDownLatch(1);
 		CountDownLatch latch = new CountDownLatch(4);
@@ -1068,7 +1074,7 @@ public class FluxTests extends AbstractReactorTest {
 		int parallelStreams = 16;
 		CountDownLatch latch = new CountDownLatch(1);
 
-		final EmitterProcessor<Integer> streamBatcher = EmitterProcessor.create();
+		final FluxIdentityProcessor<Integer> streamBatcher = Processors.multicast();
 		streamBatcher.publishOn(asyncGroup)
 		             .bufferTimeout(batchsize, Duration.ofSeconds(timeout))
 		             .log("batched")
@@ -1203,9 +1209,9 @@ public class FluxTests extends AbstractReactorTest {
 
 		Phaser phaser = new Phaser(2);
 
-		Flux<Object> s1 = ReplayProcessor.cacheLastOrDefault(new Object())
+		Flux<Object> s1 = Processors.more().replayLatestOrDefault(new Object())
 		                                 .publishOn(asyncGroup);
-		Flux<Object> s2 = ReplayProcessor.cacheLastOrDefault(new Object())
+		Flux<Object> s2 = Processors.more().replayLatestOrDefault(new Object())
 		                                .publishOn(asyncGroup);
 
 		// The following works:
@@ -1334,9 +1340,9 @@ public class FluxTests extends AbstractReactorTest {
 	@Test(timeout = TIMEOUT)
 	public void multiplexUsingDispatchersAndSplit() throws Exception {
 
-		final EmitterProcessor<Integer> forkEmitterProcessor = EmitterProcessor.create();
+		final FluxIdentityProcessor<Integer> forkEmitterProcessor = Processors.multicast();
 
-		final EmitterProcessor<Integer> computationEmitterProcessor = EmitterProcessor.create(false);
+		final FluxIdentityProcessor<Integer> computationEmitterProcessor = Processors.more().multicast(false);
 
 		Scheduler computation = Schedulers.newSingle("computation");
 		Scheduler persistence = Schedulers.newSingle("persistence");
@@ -1354,7 +1360,7 @@ public class FluxTests extends AbstractReactorTest {
 				                      .doOnNext(ls -> println("Computed: ", ls))
 				                      .log("computation");
 
-		final EmitterProcessor<Integer> persistenceEmitterProcessor = EmitterProcessor.create(false);
+		final FluxIdentityProcessor<Integer> persistenceEmitterProcessor = Processors.more().multicast(false);
 
 		final Flux<List<String>> persistenceStream =
 				persistenceEmitterProcessor.publishOn(persistence)
@@ -1425,7 +1431,7 @@ public class FluxTests extends AbstractReactorTest {
 			Thread.setDefaultUncaughtExceptionHandler(null);
 			Schedulers.resetOnHandleError();
 		}
-		Assert.assertThat("Uncaught error not handled", handled.get(), is(true));
+		assertThat(handled).as("Uncaught error handler").isTrue();
 		if (failure.get() != null) {
 			fail(failure.get());
 		}
@@ -1446,6 +1452,192 @@ public class FluxTests extends AbstractReactorTest {
 			println("Succeeded " + successCount + " time" + (successCount <= 1 ? "." : "s."));
 		}
 
+	}
+
+	@Test
+	public void fluxFromFluxSourceDoesntCallAssemblyHook() {
+		final Flux<Integer> source = Flux.range(1, 10);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(0);
+	}
+
+	@Test
+	public void fluxFromScalarJustCallsAssemblyHook() {
+		final Mono<String> source = Mono.just("scalarJust");
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxFromScalarErrorCallsAssemblyHook() {
+		final Mono<Object> source = Mono.error(new IllegalStateException("scalarError"));
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxFromScalarEmptyCallsAssemblyHook() {
+		final Mono<Object> source = Mono.empty();
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxFromMonoFuseableCallsAssemblyHook() {
+		Mono<String> source = Mono.just("monoFuseable").map(i -> i);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxFromMonoNormalCallsAssemblyHook() {
+		final Mono<String> source = Mono.just("monoNormal")
+		                                .hide()
+		                                .map(i -> i);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(source);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxFromPublisherCallsAssemblyHook() {
+		Publisher<String> publisher = sub -> sub.onSubscribe(Operators.emptySubscription());
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		Flux.from(publisher);
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxNextScalarEmptyCallsAssemblyHook() {
+		Flux<Integer> source = Flux.empty();
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		source.next();
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxNextScalarValuedCallsAssemblyHook() {
+		Flux<Integer> source = Flux.just(1);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		source.next();
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxNextScalarErrorCallsAssemblyHook() {
+		Flux<Integer> source = Flux.error(new IllegalStateException("boom"));
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		source.next();
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxNextCallableCallsAssemblyHook() {
+		Flux<Integer> source = Mono.fromCallable(() -> 1).flux();
+		Assertions.assertThat(source) //smoke test that we go into the right case
+		          .isInstanceOf(Callable.class)
+		          .isNotInstanceOf(Mono.class)
+		          .isNotInstanceOf(Fuseable.ScalarCallable.class);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		source.next();
+		Assertions.assertThat(wrappedCount).hasValue(1);
+	}
+
+	@Test
+	public void fluxNextNormalCallsAssemblyHook() {
+		Flux<Integer> source = Flux.range(1, 10);
+
+		//set the hook AFTER the original operators have been invoked (since they trigger assembly themselves)
+		AtomicInteger wrappedCount = new AtomicInteger();
+		Hooks.onEachOperator(p -> {
+			wrappedCount.incrementAndGet();
+			return p;
+		});
+
+		source.next();
+		Assertions.assertThat(wrappedCount).hasValue(1);
 	}
 
 	private static final long TIMEOUT = 10_000;

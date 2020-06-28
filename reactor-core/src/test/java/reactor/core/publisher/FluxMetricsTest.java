@@ -17,9 +17,11 @@
 package reactor.core.publisher;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import io.micrometer.core.instrument.Counter;
@@ -36,6 +38,7 @@ import org.junit.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
 import reactor.core.Scannable;
+import reactor.test.StepVerifier;
 import reactor.test.publisher.TestPublisher;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -219,28 +222,23 @@ public class FluxMetricsTest {
 		AtomicReference<Throwable> errorDropped = new AtomicReference<>();
 		Hooks.onErrorDropped(errorDropped::set);
 		Exception dropError = new IllegalStateException("malformedOnError");
-		try {
-			TestPublisher<Integer> testPublisher = TestPublisher.createNoncompliant(CLEANUP_ON_TERMINATE);
-			Flux<Integer> source = testPublisher.flux().hide();
+		TestPublisher<Integer> testPublisher = TestPublisher.createNoncompliant(CLEANUP_ON_TERMINATE);
+		Flux<Integer> source = testPublisher.flux().hide();
 
-			new FluxMetrics<>(source, registry)
-					.subscribe();
+		new FluxMetrics<>(source, registry)
+				.subscribe();
 
-			testPublisher.next(1)
-			             .complete()
-			             .error(dropError);
+		testPublisher.next(1)
+		             .complete()
+		             .error(dropError);
 
-			Counter malformedMeter = registry
-					.find(METER_MALFORMED)
-					.counter();
+		Counter malformedMeter = registry
+				.find(METER_MALFORMED)
+				.counter();
 
-			assertThat(malformedMeter).isNotNull();
-			assertThat(malformedMeter.count()).isEqualTo(1);
-			assertThat(errorDropped).hasValue(dropError);
-		}
-		finally{
-			Hooks.resetOnErrorDropped();
-		}
+		assertThat(malformedMeter).isNotNull();
+		assertThat(malformedMeter.count()).isEqualTo(1);
+		assertThat(errorDropped).hasValue(dropError);
 	}
 
 	@Test
@@ -460,5 +458,30 @@ public class FluxMetricsTest {
 				.collect(Collectors.toSet());
 
 		assertThat(uniqueTagKeySets).hasSize(1);
+	}
+
+	@Test
+	public void ensureFuseablePropagateOnComplete_inCaseOfAsyncFusion() {
+		Flux.fromIterable(Arrays.asList(1, 2, 3))
+		    .metrics()
+		    .flatMapIterable(Arrays::asList)
+		    .as(StepVerifier::create)
+		    .expectNext(1, 2, 3)
+		    .expectComplete()
+		    .verify(Duration.ofMillis(500));
+	}
+
+	@Test
+	public void ensureOnNextInAsyncModeIsCapableToPropagateNulls() {
+		Flux.using(() -> "irrelevant",
+				irrelevant -> Mono.fromSupplier(() -> Arrays.asList(1, 2, 3)),
+				irrelevant -> {
+				})
+		    .metrics()
+		    .flatMapIterable(Function.identity())
+		    .as(StepVerifier::create)
+		    .expectNext(1, 2, 3)
+		    .expectComplete()
+		    .verify(Duration.ofMillis(500));
 	}
 }

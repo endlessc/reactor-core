@@ -1009,7 +1009,14 @@ final class FluxReplay<T> extends ConnectableFlux<T> implements Scannable, Fusea
 			long ttl,
 			@Nullable Scheduler scheduler) {
 		this.source = Objects.requireNonNull(source, "source");
-		this.optimizableOperator = source instanceof OptimizableOperator ? (OptimizableOperator) source : null;
+		if (source instanceof OptimizableOperator) {
+			@SuppressWarnings("unchecked")
+			OptimizableOperator<?, T> optimSource = (OptimizableOperator<?, T>) source;
+			this.optimizableOperator = optimSource;
+		}
+		else {
+			this.optimizableOperator = null;
+		}
 		this.history = history;
 		if(history < 0){
 			throw new IllegalArgumentException("History cannot be negative : " + history);
@@ -1062,22 +1069,34 @@ final class FluxReplay<T> extends ConnectableFlux<T> implements Scannable, Fusea
 
 		cancelSupport.accept(s);
 		if (doConnect) {
-			source.subscribe(s);
+			try {
+				source.subscribe(s);
+			}
+			catch (Throwable e) {
+				Operators.reportThrowInSubscribe(connection, e);
+				return;
+			}
 		}
 	}
 
 	@Override
 	@SuppressWarnings("unchecked")
 	public void subscribe(CoreSubscriber<? super T> actual) {
-		CoreSubscriber nextSubscriber = subscribeOrReturn(actual);
-		if (nextSubscriber == null) {
+		try {
+			CoreSubscriber nextSubscriber = subscribeOrReturn(actual);
+			if (nextSubscriber == null) {
+				return;
+			}
+			source.subscribe(nextSubscriber);
+		}
+		catch (Throwable e) {
+			Operators.error(actual, Operators.onOperatorError(e, actual.currentContext()));
 			return;
 		}
-		source.subscribe(nextSubscriber);
 	}
 
 	@Override
-	public final CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) {
+	public final CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super T> actual) throws Throwable {
 		boolean expired;
 		for (; ; ) {
 			ReplaySubscriber<T> c = connection;

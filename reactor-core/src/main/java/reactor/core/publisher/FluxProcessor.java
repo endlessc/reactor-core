@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 import org.reactivestreams.Processor;
 import org.reactivestreams.Publisher;
 import org.reactivestreams.Subscriber;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
 import reactor.core.Scannable;
@@ -54,6 +55,7 @@ public abstract class FluxProcessor<IN, OUT> extends Flux<OUT>
 	 * @return a {@link FluxProcessor} accepting publishers and producing T
 	 */
 	public static <T> FluxProcessor<Publisher<? extends T>, T> switchOnNext() {
+		@SuppressWarnings("deprecation")
 		UnicastProcessor<Publisher<? extends T>> emitter = UnicastProcessor.create();
 		FluxProcessor<Publisher<? extends T>, T> p = FluxProcessor.wrap(emitter, switchOnNext(emitter));
 		return p;
@@ -177,6 +179,9 @@ public abstract class FluxProcessor<IN, OUT> extends Flux<OUT>
 	 * Create a {@link FluxProcessor} that safely gates multi-threaded producer
 	 * {@link Subscriber#onNext(Object)}.
 	 *
+	 * @reactor.discard The resulting processor discards elements received from the source
+	 * {@link Publisher} (if any) when it cancels subscription to said source.
+	 *
 	 * @return a serializing {@link FluxProcessor}
 	 */
 	public final FluxProcessor<IN, OUT> serialize() {
@@ -198,7 +203,9 @@ public abstract class FluxProcessor<IN, OUT> extends Flux<OUT>
 	 * </ul>
 	 *
 	 * @return a serializing {@link FluxSink}
+	 * @deprecated Prefer clear cut usage of either {@link Processors} or {@link Sinks}, to be removed in 3.5
 	 */
+	@Deprecated
 	public final FluxSink<IN> sink() {
 		return sink(FluxSink.OverflowStrategy.IGNORE);
 	}
@@ -222,7 +229,9 @@ public abstract class FluxProcessor<IN, OUT> extends Flux<OUT>
 	 * for the
 	 * available strategies
 	 * @return a serializing {@link FluxSink}
+	 * @deprecated Prefer clear cut usage of either {@link Processors} or {@link Sinks}, to be removed in 3.5
 	 */
+	@Deprecated
 	public final FluxSink<IN> sink(FluxSink.OverflowStrategy strategy) {
 		Objects.requireNonNull(strategy, "strategy");
 		if (getBufferSize() == Integer.MAX_VALUE){

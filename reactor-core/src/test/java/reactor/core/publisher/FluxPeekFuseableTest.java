@@ -27,12 +27,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 
-import javax.annotation.Nullable;
-
 import org.junit.Assert;
 import org.junit.Test;
 import org.mockito.Mockito;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
 import reactor.core.Fuseable;
@@ -44,12 +43,12 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.MockUtils;
 import reactor.test.StepVerifier;
 import reactor.test.subscriber.AssertSubscriber;
+import reactor.util.annotation.Nullable;
 import reactor.util.concurrent.Queues;
 import reactor.util.context.Context;
 
 import static java.lang.Thread.sleep;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.CoreMatchers.*;
 import static org.junit.Assert.*;
 import static reactor.core.scheduler.Schedulers.parallel;
 
@@ -397,7 +396,7 @@ public class FluxPeekFuseableTest {
 		ts.assertNoValues();
 		ts.assertComplete();
 
-		Assert.assertThat(errorCallbackCapture.get(), is(nullValue()));
+		assertThat(errorCallbackCapture).hasValue(null);
 
 
 		//same with after error
@@ -418,7 +417,7 @@ public class FluxPeekFuseableTest {
 		ts.assertNoValues();
 		ts.assertError(NullPointerException.class);
 
-		Assert.assertThat(errorCallbackCapture.get(), is(instanceOf(NullPointerException.class)));
+		assertThat(errorCallbackCapture.get()).isInstanceOf(NullPointerException.class);
 	}
 
 	@Test
@@ -498,7 +497,7 @@ public class FluxPeekFuseableTest {
 	public void asyncFusionAvailable() {
 		AssertSubscriber<Integer> ts = AssertSubscriber.create();
 
-		UnicastProcessor.create(Queues.<Integer>get(2).get())
+		Processors.more().unicast(Queues.<Integer>get(2).get())
 		                .doOnNext(v -> {
 		                })
 		                .subscribe(ts);

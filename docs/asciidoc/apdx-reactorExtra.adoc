@@ -50,7 +50,7 @@ You can rewrite the preceding example as follows:
 ----
 .map(TupleUtils.function(Customer::new)); // <1>
 ----
-<1> (as `Customer` constructor conforms to `Consumer3` functional interface signature)
+<1> (as `Customer` constructor conforms to `Function3` functional interface signature)
 ====
 
 [[extra-math]]
@@ -73,6 +73,9 @@ Since 3.2.0, one of the most advanced retry strategies offered by these utilitie
 also part of the `reactor-core` main artifact directly. Exponential backoff is
 available as the `Flux#retryBackoff` operator.
 
+Since 3.3.4, the `Retry` builder is offered directly in core and has a few more possible
+customizations, being based on a `RetrySignal` that encapsulates additional state than the
+error.
 
 [[extra-schedulers]]
 == Schedulers

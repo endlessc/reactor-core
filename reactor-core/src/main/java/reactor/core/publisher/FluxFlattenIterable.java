@@ -71,19 +71,10 @@ final class FluxFlattenIterable<T, R> extends InternalFluxOperator<T, R> impleme
 
 	@Override
 	@SuppressWarnings("unchecked")
-	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) {
+	public CoreSubscriber<? super T> subscribeOrReturn(CoreSubscriber<? super R> actual) throws Exception {
 
 		if (source instanceof Callable) {
-			T v;
-
-			try {
-				v = ((Callable<T>) source).call();
-			}
-			catch (Throwable ex) {
-				Operators.error(actual, Operators.onOperatorError(ex,
-						actual.currentContext()));
-				return null;
-			}
+			T v = ((Callable<T>) source).call();
 
 			if (v == null) {
 				Operators.complete(actual);
@@ -249,14 +240,14 @@ final class FluxFlattenIterable<T, R> extends InternalFluxOperator<T, R> impleme
 					return;
 				}
 			}
-			drain();
+			drain(t);
 		}
 
 		@Override
 		public void onError(Throwable t) {
 			if (Exceptions.addThrowable(ERROR, this, t)) {
 				done = true;
-				drain();
+				drain(null);
 			}
 			else {
 				Operators.onErrorDropped(t, actual.currentContext());
@@ -266,14 +257,14 @@ final class FluxFlattenIterable<T, R> extends InternalFluxOperator<T, R> impleme
 		@Override
 		public void onComplete() {
 			done = true;
-			drain();
+			drain(null);
 		}
 
 		@Override
 		public void request(long n) {
 			if (Operators.validate(n)) {
 				Operators.addCap(REQUESTED, this, n);
-				drain();
+				drain(null);
 			}
 		}
 
@@ -673,8 +664,11 @@ final class FluxFlattenIterable<T, R> extends InternalFluxOperator<T, R> impleme
 			}
 		}
 
-		void drain() {
+		void drain(@Nullable T dataSignal) {
 			if (WIP.getAndIncrement(this) != 0) {
+				if (dataSignal != null && cancelled) {
+					Operators.onDiscard(dataSignal, actual.currentContext());
+				}
 				return;
 			}
 

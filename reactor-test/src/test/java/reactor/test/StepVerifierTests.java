@@ -37,13 +37,15 @@ import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
 
+import reactor.core.CoreSubscriber;
 import reactor.core.Fuseable;
-import reactor.core.publisher.DirectProcessor;
-import reactor.core.publisher.EmitterProcessor;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxIdentityProcessor;
+import reactor.core.publisher.FluxProcessor;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoProcessor;
-import reactor.core.publisher.UnicastProcessor;
+import reactor.core.publisher.Operators;
+import reactor.core.publisher.Processors;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.publisher.TestPublisher;
@@ -623,7 +625,7 @@ public class StepVerifierTests {
 
 	@Test
 	public void verifyThenOnCompleteRange() {
-		DirectProcessor<Void> p = DirectProcessor.create();
+		FluxIdentityProcessor<Void> p = Processors.more().multicastNoBackpressure();
 
 		Flux<String> flux = Flux.range(0, 3)
 		                        .map(d -> "t" + d)
@@ -1986,7 +1988,7 @@ public class StepVerifierTests {
 
 	@Test
 	public void takeAsyncFusedBackpressured() {
-		UnicastProcessor<String> up = UnicastProcessor.create();
+		FluxIdentityProcessor<String> up = Processors.unicast();
 		StepVerifier.create(up.take(3), 0)
 		            .expectFusion()
 		            .then(() -> up.onNext("test"))
@@ -2001,7 +2003,7 @@ public class StepVerifierTests {
 
 	@Test
 	public void cancelAsyncFusion() {
-		UnicastProcessor<String> up = UnicastProcessor.create();
+		FluxIdentityProcessor<String> up = Processors.unicast();
 		StepVerifier.create(up.take(3), 0)
 		            .expectFusion()
 		            .then(() -> up.onNext("test"))
@@ -2072,7 +2074,7 @@ public class StepVerifierTests {
 	@Test
 	public void assertNextWithSubscribeOnDirectProcessor() {
 		Scheduler scheduler = Schedulers.newBoundedElastic(1, 100, "test");
-		DirectProcessor<Integer> processor = DirectProcessor.create();
+		FluxIdentityProcessor<Integer> processor = Processors.more().multicastNoBackpressure();
 		Mono<Integer> doAction = Mono.fromSupplier(() -> 22)
 		                             .doOnNext(processor::onNext)
 		                             .subscribeOn(scheduler);
@@ -2330,7 +2332,7 @@ public class StepVerifierTests {
 	@Test
 	public void verifyDrainOnRequestInCaseOfFusion2() {
 		ArrayList<Long> requests = new ArrayList<>();
-		UnicastProcessor<Integer> processor = UnicastProcessor.create();
+		FluxIdentityProcessor<Integer> processor = Processors.unicast();
 		StepVerifier.create(processor.doOnRequest(requests::add), 0)
 				.expectFusion(Fuseable.ANY)
 				.then(() -> {
@@ -2354,7 +2356,7 @@ public class StepVerifierTests {
 
 
 		StepVerifier.withVirtualTime(() -> {
-			EmitterProcessor<String> fluxEmitter = EmitterProcessor.create();
+			FluxIdentityProcessor<String> fluxEmitter = Processors.multicast();
 
 			subscriptionWorker.schedulePeriodically(() -> {
 				if (source.size() > 0) {
@@ -2374,5 +2376,22 @@ public class StepVerifierTests {
 		            .expectNoEvent(Duration.ofMillis(10))
 		            .expectComplete()
 		            .verify(Duration.ofSeconds(2));
+	}
+
+	// See https://github.com/reactor/reactor-core/issues/2107
+	@Test
+	public void mutualizedSubscribeErrorHandlingPostOnSubscribe() {
+		Flux<Object> errorInSubscribeFlux = new Flux<Object>() {
+			@Override
+			public void subscribe(CoreSubscriber<? super Object> actual) {
+				actual.onSubscribe(Operators.emptySubscription());
+				throw new IllegalStateException("ErrorInSubscribeFlux");
+			}
+		};
+		StepVerifier.create(errorInSubscribeFlux).verifyErrorSatisfies(e -> {
+            assertThat(e)
+		            .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("ErrorInSubscribeFlux");
+        });
 	}
 }

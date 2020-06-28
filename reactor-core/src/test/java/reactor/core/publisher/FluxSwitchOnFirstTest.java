@@ -18,26 +18,32 @@ package reactor.core.publisher;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.assertj.core.api.Assertions;
+import org.assertj.core.api.Assumptions;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.reactivestreams.Subscription;
+
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.Fuseable;
+import reactor.core.Scannable;
+import reactor.core.Scannable.Attr;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
@@ -70,7 +76,7 @@ public class FluxSwitchOnFirstTest {
                     }))
                     .expectSubscription()
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(throwables[0])
@@ -101,7 +107,7 @@ public class FluxSwitchOnFirstTest {
                     )
                     .expectSubscription()
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(throwables[0])
@@ -112,10 +118,11 @@ public class FluxSwitchOnFirstTest {
     @Test
     public void shouldNotSubscribeTwiceWhenCanceled() {
         CountDownLatch latch = new CountDownLatch(1);
+        CountDownLatch nextLatch = new CountDownLatch(1);
         StepVerifier.create(Flux.just(1L)
                                 .doOnComplete(() -> {
                                     try {
-                                        latch.await();
+                                        if (!latch.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("latch didn't complete in 5s");
                                     }
                                     catch (InterruptedException e) {
                                         throw new RuntimeException(e);
@@ -128,25 +135,34 @@ public class FluxSwitchOnFirstTest {
                                 .switchOnFirst((s, f) -> f)
                                 .doOnSubscribe(s ->
                                     Schedulers
-                                            .single()
-                                            .schedule(s::cancel, 10, TimeUnit.MILLISECONDS)
+                                            .elastic()
+                                            .schedule(() -> {
+                                                try {
+                                                    nextLatch.await();
+                                                } catch (InterruptedException e) {
+                                                    e.printStackTrace();
+                                                }
+                                                s.cancel();
+                                            })
                                 )
+                                .doOnNext(t -> nextLatch.countDown())
         )
                     .expectSubscription()
                     .expectNext(1L)
                     .expectNoEvent(Duration.ofMillis(200))
                     .thenCancel()
-                    .verifyThenAssertThat()
+                    .verifyThenAssertThat(Duration.ofSeconds(20))
                     .hasNotDroppedErrors();
     }
 
     @Test
     public void shouldNotSubscribeTwiceConditionalWhenCanceled() {
         CountDownLatch latch = new CountDownLatch(1);
+        CountDownLatch nextLatch = new CountDownLatch(1);
         StepVerifier.create(Flux.just(1L)
                                 .doOnComplete(() -> {
                                     try {
-                                        latch.await();
+                                        if (!latch.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("latch didn't complete in 5s");
                                     }
                                     catch (InterruptedException e) {
                                         throw new RuntimeException(e);
@@ -160,15 +176,23 @@ public class FluxSwitchOnFirstTest {
                                 .filter(e -> true)
                                 .doOnSubscribe(s ->
                                     Schedulers
-                                        .single()
-                                        .schedule(s::cancel, 10, TimeUnit.MILLISECONDS)
+                                        .elastic()
+                                        .schedule(() -> {
+                                            try {
+                                                nextLatch.await();
+                                            } catch (InterruptedException e) {
+                                                e.printStackTrace();
+                                            }
+                                            s.cancel();
+                                        })
                                 )
+                                .doOnNext(t -> nextLatch.countDown())
         )
                     .expectSubscription()
                     .expectNext(1L)
                     .expectNoEvent(Duration.ofMillis(200))
                     .thenCancel()
-                    .verifyThenAssertThat()
+                    .verifyThenAssertThat(Duration.ofSeconds(5))
                     .hasNotDroppedErrors();
     }
 
@@ -188,7 +212,7 @@ public class FluxSwitchOnFirstTest {
         )
                     .expectSubscription()
                     .expectError(RuntimeException.class)
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(first).containsExactly(Signal.error(error));
@@ -210,7 +234,7 @@ public class FluxSwitchOnFirstTest {
                     .expectSubscription()
                     .expectNext(1L)
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat((long) first[0].get()).isEqualTo(1L);
@@ -230,7 +254,7 @@ public class FluxSwitchOnFirstTest {
                 }))
                     .expectSubscription()
                     .expectError(RuntimeException.class)
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(first).containsExactly(Signal.error(error));
@@ -249,7 +273,7 @@ public class FluxSwitchOnFirstTest {
                 }))
                     .expectSubscription()
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(first).containsExactly(Signal.complete());
@@ -269,7 +293,7 @@ public class FluxSwitchOnFirstTest {
                                 }))
                     .expectSubscription()
                     .expectError(RuntimeException.class)
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat(first).containsExactly(Signal.error(error));
@@ -289,7 +313,7 @@ public class FluxSwitchOnFirstTest {
                     .expectSubscription()
                     .expectNext(1L)
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat((long) first[0].get()).isEqualTo(1L);
@@ -298,22 +322,23 @@ public class FluxSwitchOnFirstTest {
 
     @Test
     public void shouldSendOnNextAsyncSignal() {
-        @SuppressWarnings("unchecked")
-        Signal<? extends Long>[] first = new Signal[1];
+        for (int i = 0; i < 10000; i++) {
+            @SuppressWarnings("unchecked") Signal<? extends Long>[] first = new Signal[1];
 
-        StepVerifier.create(Flux.just(1L)
-                                .switchOnFirst((s, f) -> {
-                                    first[0] = s;
+            StepVerifier.create(Flux.just(1L)
+                                    .switchOnFirst((s, f) -> {
+                                        first[0] = s;
 
-                                    return f.subscribeOn(Schedulers.elastic());
-                                }))
-                    .expectSubscription()
-                    .expectNext(1L)
-                    .expectComplete()
-                    .verify();
+                                        return f.subscribeOn(Schedulers.elastic());
+                                    }))
+                        .expectSubscription()
+                        .expectNext(1L)
+                        .expectComplete()
+                        .verify(Duration.ofSeconds(5));
 
-
-        Assertions.assertThat((long) first[0].get()).isEqualTo(1L);
+            Assertions.assertThat((long) first[0].get())
+                      .isEqualTo(1L);
+        }
     }
 
     @Test
@@ -332,7 +357,7 @@ public class FluxSwitchOnFirstTest {
                     .expectSubscription()
                     .expectNext(1L)
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
 
         Assertions.assertThat((long) first[0].get()).isEqualTo(1L);
@@ -468,7 +493,7 @@ public class FluxSwitchOnFirstTest {
                     .contains("c", "d")
                     .then()
                     .expectComplete()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
         Assertions.assertThat(first).containsExactly(Signal.complete(Context.of("a", "c").put("c", "d")));
     }
@@ -494,7 +519,7 @@ public class FluxSwitchOnFirstTest {
                 .contains("c", "d")
                 .then()
                 .expectComplete()
-                .verify();
+                .verify(Duration.ofSeconds(5));
 
         Assertions.assertThat(first).containsExactly(Signal.complete(Context.of("a", "c").put("c", "d")));
     }
@@ -523,7 +548,7 @@ public class FluxSwitchOnFirstTest {
                     .then(() -> publisher.error(new RuntimeException()))
                     .then(() -> publisher.error(new RuntimeException()))
                     .expectError()
-                    .verifyThenAssertThat()
+                    .verifyThenAssertThat(Duration.ofSeconds(5))
                     .hasDroppedErrors(3)
                     .tookLessThan(Duration.ofSeconds(10));
 
@@ -740,7 +765,7 @@ public class FluxSwitchOnFirstTest {
                 .switchOnFirst((first, innerFlux) -> innerFlux.map(String::valueOf))
                 .doOnCancel(() -> {
                     try {
-                        latch1.await();
+                        if (!latch1.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("latch didn't complete in 5s");
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
@@ -849,7 +874,7 @@ public class FluxSwitchOnFirstTest {
                 .doOnDiscard(Integer.class, e -> discarded[0] = e)
                 .doOnCancel(() -> {
                     try {
-                        latch.await();
+                        if (!latch.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("latch didn't complete in 5s");
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
@@ -882,36 +907,28 @@ public class FluxSwitchOnFirstTest {
     @Test
     public void shouldBeAbleToCancelSubscription() throws InterruptedException {
         Flux<Long> publisher = Flux.just(1L);
-        for (int j = 0; j < 100; j++) {
-            ArrayList<Long> capturedElements = new ArrayList<>();
-            ArrayList<Boolean> capturedCompletions = new ArrayList<>();
-            for (int i = 0; i < 1000; i++) {
-                AtomicLong captureElement = new AtomicLong(0L);
-                AtomicBoolean captureCompletion = new AtomicBoolean(false);
-                AtomicLong requested = new AtomicLong();
-                CountDownLatch latch = new CountDownLatch(1);
-                Flux<Long> switchTransformed = publisher.doOnRequest(requested::addAndGet)
-                                                        .doOnCancel(latch::countDown)
-                                                        .switchOnFirst((first, innerFlux) -> innerFlux)
-                                                        .doOnComplete(latch::countDown);
+        ArrayList<Integer> capturedElementsNumber = new ArrayList<>();
+        for (int i = 0; i < 10000; i++) {
+            final ArrayList<Throwable> dropped = new ArrayList<>();
+            final AtomicLong requested = new AtomicLong();
+            final CountDownLatch latch = new CountDownLatch(1);
+            final AssertSubscriber<Long> assertSubscriber = new AssertSubscriber<>(Context.of(Hooks.KEY_ON_ERROR_DROPPED, (Consumer<Throwable>) dropped::add), 0);
+            final Flux<Long> switchTransformed = publisher
+                                                    .doOnRequest(requested::addAndGet)
+                                                    .doOnCancel(latch::countDown)
+                                                    .switchOnFirst((first, innerFlux) -> innerFlux.doOnComplete(latch::countDown));
 
-                switchTransformed.subscribeWith(new LambdaSubscriber<>(
-                    captureElement::set,
-                    __ -> { },
-                    () -> captureCompletion.set(true),
-                    s -> ForkJoinPool.commonPool().execute(() ->
-                        RaceTestUtils.race(s::cancel, () -> s.request(1), Schedulers.parallel())
-                    )
-                ));
+            switchTransformed.subscribe(assertSubscriber);
 
-                Assertions.assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
-                capturedElements.add(captureElement.get());
-                capturedCompletions.add(captureCompletion.get());
-            }
+            RaceTestUtils.race(assertSubscriber::cancel, () -> assertSubscriber.request(1));
 
-            Assertions.assertThat(capturedElements).contains(0L);
-            Assertions.assertThat(capturedCompletions).contains(false);
+            Assertions.assertThat(latch.await(500, TimeUnit.SECONDS)).isTrue();
+
+            capturedElementsNumber.add(assertSubscriber.values().size());
         }
+
+        Assumptions.assumeThat(capturedElementsNumber).contains(0);
+        Assumptions.assumeThat(capturedElementsNumber).contains(1);
     }
 
     @Test
@@ -928,7 +945,7 @@ public class FluxSwitchOnFirstTest {
                                 }))
                     .expectSubscription()
                     .expectError(NullPointerException.class)
-                    .verifyThenAssertThat()
+                    .verifyThenAssertThat(Duration.ofSeconds(5))
                     .hasOperatorErrorsSatisfying(c ->
                         Assertions.assertThat(c)
                                   .hasOnlyOneElementSatisfying(t -> {
@@ -1066,14 +1083,15 @@ public class FluxSwitchOnFirstTest {
 
         StepVerifier.create(source.switchOnFirst((s, f) -> f.filter(v -> v % 2 == s.get())))
                     .expectNext(1, 3, 5, 7, 9)
-                    .verifyComplete();
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
 
         Assertions.assertThat(subCount).hasValue(1);
     }
 
     @Test
     public void checkHotSource() {
-        ReplayProcessor<Long> processor = ReplayProcessor.create(1);
+        FluxIdentityProcessor<Long> processor = Processors.replay(1);
 
         processor.onNext(1L);
         processor.onNext(2L);
@@ -1092,50 +1110,54 @@ public class FluxSwitchOnFirstTest {
                         processor.onComplete();
                     })
                     .expectNext(6L, 9L)
-                    .verifyComplete();
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
     }
 
     @Test
     public void shouldCancelSourceOnUnrelatedPublisherComplete() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.empty()))
                     .expectSubscription()
-                    .verifyComplete();
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
     public void shouldNotCancelSourceOnUnrelatedPublisherComplete() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.empty(), false))
                 .expectSubscription()
-                .verifyComplete();
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isFalse();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isFalse();
     }
 
     @Test
     public void shouldCancelSourceOnUnrelatedPublisherError() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.error(new RuntimeException("test"))))
                     .expectSubscription()
-                    .verifyErrorSatisfies(t ->
+                    .expectErrorSatisfies(t ->
                         Assertions.assertThat(t)
                                   .hasMessage("test")
                                   .isExactlyInstanceOf(RuntimeException.class)
-                    );
+                    )
+                    .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
@@ -1145,47 +1167,51 @@ public class FluxSwitchOnFirstTest {
         StepVerifier.create(testPublisher.flux().switchOnFirst((s, f) -> Flux.error(new RuntimeException("test"))))
                     .expectSubscription()
                     .thenCancel()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
         Assertions.assertThat(testPublisher.wasCancelled()).isTrue();
     }
 
     @Test
     public void shouldCancelSourceOnUnrelatedPublisherCompleteConditional() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.empty().delaySubscription(Duration.ofMillis(10))).filter(__ -> true))
                     .then(() -> {
-                        FluxPublish.PubSubInner<Long>[] subs = testPublisher.subscribers;
-                        Assertions.assertThat(subs).hasSize(1);
-                        Assertions.assertThat(subs[0])
-                                  .extracting(psi -> psi.actual)
+                        List<? extends Scannable> subs = testPublisher.inners().collect(Collectors.toList());
+                        Assertions.assertThat(subs)
+                                  .hasSize(1)
+                                  .first()
+                                  .extracting(psi -> psi.scan(Attr.ACTUAL))
                                   .isInstanceOf(Fuseable.ConditionalSubscriber.class);
                     })
-                    .verifyComplete();
+                    .expectComplete()
+                    .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
     public void shouldNotCancelSourceOnUnrelatedPublisherCompleteConditional() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.empty().delaySubscription(Duration.ofMillis(10)), false).filter(__ -> true))
                 .then(() -> {
-                    FluxPublish.PubSubInner<Long>[] subs = testPublisher.subscribers;
-                    Assertions.assertThat(subs).hasSize(1);
-                    Assertions.assertThat(subs[0])
-                            .extracting(psi -> psi.actual)
-                            .isInstanceOf(Fuseable.ConditionalSubscriber.class);
+                    List<? extends Scannable> subs = testPublisher.inners().collect(Collectors.toList());
+                    Assertions.assertThat(subs)
+                              .hasSize(1)
+                              .first()
+                              .extracting(psi -> psi.scan(Attr.ACTUAL))
+                              .isInstanceOf(Fuseable.ConditionalSubscriber.class);
                 })
-                .verifyComplete();
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isFalse();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isFalse();
     }
 
     @Test
@@ -1215,7 +1241,7 @@ public class FluxSwitchOnFirstTest {
                 .expectSubscription()
                 .then(() -> testPublisher.next(1L))
                 .thenCancel()
-                .verify();
+                .verify(Duration.ofSeconds(5));
 
             Assertions.assertThat(testPublisher.wasCancelled()).isTrue();
             Assertions.assertThat(testPublisherInner.wasCancelled()).isFalse();
@@ -1252,7 +1278,7 @@ public class FluxSwitchOnFirstTest {
                     .expectSubscription()
                     .then(() -> testPublisher.next(1L))
                     .thenCancel()
-                    .verify();
+                    .verify(Duration.ofSeconds(5));
 
             Assertions.assertThat(testPublisher.wasCancelled()).isTrue();
             Assertions.assertThat(testPublisherInner.wasCancelled()).isFalse();
@@ -1265,64 +1291,68 @@ public class FluxSwitchOnFirstTest {
 
     @Test
     public void shouldCancelSourceOnUnrelatedPublisherErrorConditional() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.error(new RuntimeException("test")).delaySubscription(Duration.ofMillis(10))).filter(__ -> true))
                     .then(() -> {
-                        FluxPublish.PubSubInner<Long>[] subs = testPublisher.subscribers;
-                        Assertions.assertThat(subs).hasSize(1);
-                        Assertions.assertThat(subs[0])
-                                  .extracting(psi -> psi.actual)
+                        List<? extends Scannable> subs = testPublisher.inners().collect(Collectors.toList());
+                        Assertions.assertThat(subs)
+                                  .hasSize(1)
+                                  .first()
+                                  .extracting(psi -> psi.scan(Attr.ACTUAL))
                                   .isInstanceOf(Fuseable.ConditionalSubscriber.class);
                     })
-                    .verifyErrorSatisfies(t ->
+                    .expectErrorSatisfies(t ->
                             Assertions.assertThat(t)
                                       .hasMessage("test")
                                       .isExactlyInstanceOf(RuntimeException.class)
-                    );
+                    )
+                    .verify(Duration.ofSeconds(5));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
     public void shouldCancelSourceOnUnrelatedPublisherCancelConditional() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         testPublisher.onNext(1L);
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.error(new RuntimeException("test")).delaySubscription(Duration.ofMillis(10))).filter(__ -> true))
                     .then(() -> {
-                        FluxPublish.PubSubInner<Long>[] subs = testPublisher.subscribers;
-                        Assertions.assertThat(subs).hasSize(1);
-                        Assertions.assertThat(subs[0])
-                                  .extracting(psi -> psi.actual)
+                        List<? extends Scannable> subs = testPublisher.inners().collect(Collectors.toList());
+                        Assertions.assertThat(subs)
+                                  .hasSize(1)
+                                  .first()
+                                  .extracting(psi -> psi.scan(Attr.ACTUAL))
                                   .isInstanceOf(Fuseable.ConditionalSubscriber.class);
                     })
                     .thenAwait(Duration.ofMillis(50))
                     .thenCancel()
                     .verify();
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
     public void shouldCancelUpstreamBeforeFirst() {
-        EmitterProcessor<Long> testPublisher = EmitterProcessor.create();
+        FluxIdentityProcessor<Long> testPublisher = Processors.multicast();
 
         StepVerifier.create(testPublisher.switchOnFirst((s, f) -> Flux.error(new RuntimeException("test"))))
                 .thenAwait(Duration.ofMillis(50))
                 .thenCancel()
                 .verify(Duration.ofSeconds(2));
 
-        Assertions.assertThat(testPublisher.isCancelled()).isTrue();
+        Assertions.assertThat(testPublisher.scan(Attr.CANCELLED)).isTrue();
     }
 
     @Test
     public void shouldContinueWorkingRegardlessTerminalOnDownstream() {
         TestPublisher<Long> testPublisher = TestPublisher.create();
 
+        @SuppressWarnings("unchecked")
         Flux<Long>[] intercepted = new Flux[1];
 
         StepVerifier.create(testPublisher.flux().switchOnFirst((s, f) -> {
@@ -1360,21 +1390,22 @@ public class FluxSwitchOnFirstTest {
     }
 
     @Test
-    public void racingTest() {
+    public void racingTest() throws InterruptedException {
         for (int i = 0; i < 1000; i++) {
-            CoreSubscriber[] subscribers = new CoreSubscriber[1];
+            @SuppressWarnings("unchecked")
+            CoreSubscriber<? super Integer>[] subscribers = new CoreSubscriber[1];
             Subscription[] downstreamSubscriptions = new Subscription[1];
             Subscription[] innerSubscriptions = new Subscription[1];
 
 
             AtomicLong requested = new AtomicLong();
 
-            Flux.just(2)
+            Flux.range(0, 3)
                     .doOnRequest(requested::addAndGet)
                     .switchOnFirst((s, f) -> new Flux<Integer>() {
 
                         @Override
-                        public void subscribe(CoreSubscriber actual) {
+                        public void subscribe(CoreSubscriber<? super Integer> actual) {
                             subscribers[0] = actual;
                             f.subscribe(actual::onNext, actual::onError, actual::onComplete, (s) -> innerSubscriptions[0] = s);
                         }
@@ -1384,7 +1415,7 @@ public class FluxSwitchOnFirstTest {
                     }, () -> {
                     }, s -> downstreamSubscriptions[0] = s);
 
-            CoreSubscriber subscriber = subscribers[0];
+            CoreSubscriber<? super Integer> subscriber = subscribers[0];
             Subscription downstreamSubscription = downstreamSubscriptions[0];
             Subscription innerSubscription = innerSubscriptions[0];
             downstreamSubscription.request(1);
@@ -1398,24 +1429,26 @@ public class FluxSwitchOnFirstTest {
     @Test
     public void racingConditionalTest() {
         for (int i = 0; i < 1000; i++) {
-            CoreSubscriber[] subscribers = new CoreSubscriber[1];
+            @SuppressWarnings("unchecked")
+            CoreSubscriber<? super Integer>[] subscribers = new CoreSubscriber[1];
             Subscription[] downstreamSubscriptions = new Subscription[1];
             Subscription[] innerSubscriptions = new Subscription[1];
 
 
             AtomicLong requested = new AtomicLong();
 
-            Flux.just(2)
+            Flux.range(0, 3)
                 .doOnRequest(requested::addAndGet)
                 .switchOnFirst((s, f) -> new Flux<Integer>() {
 
                     @Override
-                    public void subscribe(CoreSubscriber actual) {
+                    public void subscribe(CoreSubscriber<? super Integer> actual) {
                         subscribers[0] = actual;
                         f.subscribe(new Fuseable.ConditionalSubscriber<Integer>() {
+                            @SuppressWarnings("unchecked")
                             @Override
                             public boolean tryOnNext(Integer integer) {
-                                return ((Fuseable.ConditionalSubscriber)actual).tryOnNext(integer);
+                                return ((Fuseable.ConditionalSubscriber<? super Integer>)actual).tryOnNext(integer);
                             }
 
                             @Override
@@ -1455,28 +1488,222 @@ public class FluxSwitchOnFirstTest {
     }
 
     @Test
-    public void unitRacingTest() {
-        for (int i = 0; i < 10000; i++) {
-            FluxSwitchOnFirst.AbstractSwitchOnFirstMain mockParent = Mockito.mock(FluxSwitchOnFirst.AbstractSwitchOnFirstMain.class);
-            Mockito.doNothing().when(mockParent).request(Mockito.anyLong());
-            Mockito.doNothing().when(mockParent).cancel();
-            Subscription mockSubscription = Mockito.mock(Subscription.class);
-            ArgumentCaptor<Long> longArgumentCaptor = ArgumentCaptor.forClass(Long.class);
-            Mockito.doNothing().when(mockSubscription).request(longArgumentCaptor.capture());
-            Mockito.doNothing().when(mockSubscription).cancel();
-            AssertSubscriber<Object> subscriber = AssertSubscriber.create(0);
-            FluxSwitchOnFirst.SwitchOnFirstControlSubscriber switchOnFirstControlSubscriber = new FluxSwitchOnFirst.SwitchOnFirstControlSubscriber<>(mockParent, subscriber, true);
+    public void racingInnerSubscribeAndOuterCancelTest() throws InterruptedException {
+        for (int i = 0; i < 1000; i++) {
+            @SuppressWarnings("unchecked")
+            CoreSubscriber<? super Integer>[] subscribers = new CoreSubscriber[1];
+            @SuppressWarnings("unchecked")
+            FluxSwitchOnFirst.SwitchOnFirstMain<Integer,Integer>[] sofSubscriber = new FluxSwitchOnFirst.SwitchOnFirstMain[1];
+            @SuppressWarnings("unchecked")
+            Flux<Integer>[] innerFlux = new Flux[1];
 
-            switchOnFirstControlSubscriber.request(10);
-            RaceTestUtils.race(() -> switchOnFirstControlSubscriber.request(10), () -> switchOnFirstControlSubscriber.onSubscribe(mockSubscription), Schedulers.parallel());
 
-            Assertions.assertThat(longArgumentCaptor.getAllValues().size()).isBetween(1, 2);
-            if (longArgumentCaptor.getAllValues().size() == 1) {
-                Assertions.assertThat(longArgumentCaptor.getValue()).isEqualTo(20L);
-            } else if (longArgumentCaptor.getAllValues().size() == 2) {
-                Assertions.assertThat(longArgumentCaptor.getAllValues()).containsExactly(10L, 10L);
-            } else {
-                Assertions.fail("Unexpected number of calls");
+            AtomicLong requested = new AtomicLong();
+            ArrayList<Throwable> dropped = new ArrayList<>();
+            AssertSubscriber<Integer> assertSubscriber = new AssertSubscriber<>(Context.of(Hooks.KEY_ON_ERROR_DROPPED, (Consumer<Throwable>) dropped::add), 0);
+
+            Flux.range(0, 3)
+                    .doOnRequest(requested::addAndGet)
+                    .transform(Operators.<Integer, Integer>lift((__, cs) -> {
+                        @SuppressWarnings("unchecked")
+                        FluxSwitchOnFirst.SwitchOnFirstMain<Integer, Integer> sofCs = (FluxSwitchOnFirst.SwitchOnFirstMain<Integer,Integer>) cs;
+                        sofSubscriber[0] = sofCs;
+                        return cs;
+                    }))
+                    .switchOnFirst((s, f) -> new Flux<Integer>() {
+                        @Override
+                        public void subscribe(CoreSubscriber<? super Integer> actual) {
+                            subscribers[0] = actual;
+                            innerFlux[0] = f;
+                        }
+                    })
+                    .subscribe(assertSubscriber);
+
+            Flux<Integer> f = innerFlux[0];
+            CoreSubscriber<? super Integer> subscriber = subscribers[0];
+            assertSubscriber.request(1);
+
+            RaceTestUtils.race(() -> f.subscribe(subscriber), () -> assertSubscriber.cancel());
+
+            Assertions.assertThat(sofSubscriber[0].inner).isEqualTo(Operators.EMPTY_SUBSCRIBER);
+
+            // if cancel first then the upstream observes request(1) and request(1) if cancel later then only a single request
+            Assertions.assertThat(requested.get()).isBetween(1L, 2L);
+
+            assertSubscriber.assertNoError();
+
+            if (dropped.size() > 0) {
+                Assertions.assertThat(dropped)
+                        .hasSize(1)
+                        .first()
+                        .isInstanceOf(CancellationException.class);
+            }
+            dropped.clear();
+        }
+    }
+
+    @Test
+    public void racingInnerSubscribeAndOuterCancelConditionalTest() throws InterruptedException {
+        for (int i = 0; i < 1000; i++) {
+            @SuppressWarnings("unchecked")
+            CoreSubscriber<? super Integer>[] subscribers = new CoreSubscriber[1];
+            @SuppressWarnings("unchecked")
+            FluxSwitchOnFirst.SwitchOnFirstConditionalMain<Integer, Integer>[] sofSubscriber = new FluxSwitchOnFirst.SwitchOnFirstConditionalMain[1];
+            @SuppressWarnings("unchecked")
+            Flux<Integer>[] innerFlux = new Flux[1];
+
+            ArrayList<Throwable> dropped = new ArrayList<>();
+            AssertSubscriber<Integer> assertSubscriber = new AssertSubscriber<>(Context.of(Hooks.KEY_ON_ERROR_DROPPED, (Consumer<Throwable>) dropped::add), 0);
+
+            AtomicLong requested = new AtomicLong();
+
+            Flux.range(0, 3)
+                    .doOnRequest(requested::addAndGet)
+                    .transform(Operators.<Integer, Integer>lift((__, cs) -> {
+                        @SuppressWarnings("unchecked")
+                        FluxSwitchOnFirst.SwitchOnFirstConditionalMain<Integer, Integer> sofCs = (FluxSwitchOnFirst.SwitchOnFirstConditionalMain<Integer,Integer>) cs;
+                        sofSubscriber[0] = sofCs;
+                        return cs;
+                    }))
+                    .switchOnFirst((s, f) -> new Flux<Integer>() {
+                        @Override
+                        public void subscribe(CoreSubscriber<? super Integer> actual) {
+                            subscribers[0] = actual;
+                            innerFlux[0] = f;
+                        }
+                    })
+                    .filter(__ -> true)
+                    .subscribe(assertSubscriber);
+
+            Flux<Integer> f = innerFlux[0];
+            CoreSubscriber<? super Integer> subscriber = subscribers[0];
+            assertSubscriber.request(1);
+
+            RaceTestUtils.race(() -> f.subscribe(subscriber), () -> assertSubscriber.cancel());
+
+            Assertions.assertThat(sofSubscriber[0].inner).isEqualTo(Operators.EMPTY_SUBSCRIBER);
+
+            // if cancel first then the upstream observes request(1) and request(1) if cancel later then only a single request
+            Assertions.assertThat(requested.get()).isBetween(1L, 2L);
+
+            assertSubscriber.assertNoError();
+
+            if (dropped.size() > 0) {
+                Assertions.assertThat(dropped)
+                        .hasSize(1)
+                        .first()
+                        .isInstanceOf(CancellationException.class);
+            }
+            dropped.clear();
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    @Test
+    public void unitRequestRacingTest() {
+        @SuppressWarnings("unchecked")
+        BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator>[] factories = new BiFunction[] {
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (CoreSubscriber) assertSubscriber, true),
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (Fuseable.ConditionalSubscriber) assertSubscriber, true)
+        };
+        for (BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator> factory : factories) {
+            for (int i = 0; i < 10000; i++) {
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain mockParent = Mockito.mock(FluxSwitchOnFirst.AbstractSwitchOnFirstMain.class);
+                Mockito.doNothing().when(mockParent).request(Mockito.anyLong());
+                Mockito.doNothing().when(mockParent).cancel();
+                Subscription mockSubscription = Mockito.mock(Subscription.class);
+                ArgumentCaptor<Long> longArgumentCaptor = ArgumentCaptor.forClass(Long.class);
+                Mockito.doNothing().when(mockSubscription).request(longArgumentCaptor.capture());
+                Mockito.doNothing().when(mockSubscription).cancel();
+                AssertSubscriber<Object> subscriber = AssertSubscriber.create(0);
+                InnerOperator switchOnFirstControlSubscriber = factory.apply(mockParent, Operators.toConditionalSubscriber(subscriber));
+
+                switchOnFirstControlSubscriber.request(10);
+                RaceTestUtils.race(() -> switchOnFirstControlSubscriber.request(10), () -> switchOnFirstControlSubscriber.onSubscribe(mockSubscription), Schedulers.parallel());
+
+                Assertions.assertThat(longArgumentCaptor.getAllValues().size()).isBetween(1, 2);
+                if (longArgumentCaptor.getAllValues().size() == 1) {
+                    Assertions.assertThat(longArgumentCaptor.getValue()).isEqualTo(20L);
+                }
+                else if (longArgumentCaptor.getAllValues().size() == 2) {
+                    Assertions.assertThat(longArgumentCaptor.getAllValues()).containsExactly(10L, 10L);
+                }
+                else {
+                    Assertions.fail("Unexpected number of calls");
+                }
+            }
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    @Test
+    public void unitRequestsAreSerialTest() {
+        @SuppressWarnings("unchecked")
+        BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator>[] factories = new BiFunction[] {
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (CoreSubscriber) assertSubscriber, true),
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (Fuseable.ConditionalSubscriber) assertSubscriber, true)
+        };
+        for (BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator> factory : factories) {
+            for (int i = 0; i < 100000; i++) {
+                long[] valueHolder = new long[] { 0 };
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain mockParent = Mockito.mock(FluxSwitchOnFirst.AbstractSwitchOnFirstMain.class);
+                Mockito.doNothing().when(mockParent).request(Mockito.anyLong());
+                Mockito.doNothing().when(mockParent).cancel();
+                Subscription mockSubscription = Mockito.mock(Subscription.class);
+                Mockito.doAnswer((a) -> valueHolder[0] += (long) a.getArgument(0)).when(mockSubscription).request(Mockito.anyLong());
+                Mockito.doNothing().when(mockSubscription).cancel();
+                AssertSubscriber<Object> subscriber = AssertSubscriber.create(0);
+                InnerOperator switchOnFirstControlSubscriber = factory.apply(mockParent, Operators.toConditionalSubscriber(subscriber));
+
+                switchOnFirstControlSubscriber.request(10);
+                RaceTestUtils.race(() -> {
+                            switchOnFirstControlSubscriber.request(10);
+                            switchOnFirstControlSubscriber.request(10);
+                            switchOnFirstControlSubscriber.request(10);
+                            switchOnFirstControlSubscriber.request(10);
+                        },
+                        () -> switchOnFirstControlSubscriber.onSubscribe(mockSubscription),
+                        Schedulers.parallel());
+
+                switchOnFirstControlSubscriber.request(10);
+                Assertions.assertThat(valueHolder[0])
+                          .isEqualTo(60L);
+                mockSubscription.toString();
+            }
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    @Test
+    public void unitCancelRacingTest() {
+        @SuppressWarnings("unchecked")
+        BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator>[] factories = new BiFunction[] {
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (CoreSubscriber) assertSubscriber, true),
+                (parent, assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalControlSubscriber((FluxSwitchOnFirst.AbstractSwitchOnFirstMain) parent, (Fuseable.ConditionalSubscriber) assertSubscriber, true)
+        };
+        for (BiFunction<FluxSwitchOnFirst.AbstractSwitchOnFirstMain, CoreSubscriber, InnerOperator> factory : factories) {
+            for (int i = 0; i < 10000; i++) {
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain mockParent = Mockito.mock(FluxSwitchOnFirst.AbstractSwitchOnFirstMain.class);
+                Mockito.doNothing().when(mockParent).request(Mockito.anyLong());
+                Mockito.doNothing().when(mockParent).cancel();
+                Subscription mockSubscription = Mockito.mock(Subscription.class);
+                ArgumentCaptor<Long> longArgumentCaptor = ArgumentCaptor.forClass(Long.class);
+                Mockito.doNothing().when(mockSubscription).request(longArgumentCaptor.capture());
+                Mockito.doNothing().when(mockSubscription).cancel();
+                AssertSubscriber<Object> subscriber = AssertSubscriber.create(0);
+                InnerOperator switchOnFirstControlSubscriber = factory.apply(mockParent, Operators.toConditionalSubscriber(subscriber));
+
+                switchOnFirstControlSubscriber.request(10);
+                RaceTestUtils.race(() -> switchOnFirstControlSubscriber.cancel(), () -> switchOnFirstControlSubscriber.onSubscribe(mockSubscription), Schedulers.parallel());
+
+                Assertions.assertThat(longArgumentCaptor.getAllValues().size()).isBetween(0, 1);
+                Mockito.verify(mockParent).cancel();
+                if (longArgumentCaptor.getAllValues().size() == 1) {
+                    Assertions.assertThat(longArgumentCaptor.getValue()).isEqualTo(10L);
+                }
+                else if (longArgumentCaptor.getAllValues().size() > 1) {
+                    Assertions.fail("Unexpected number of calls");
+                }
             }
         }
     }
@@ -1484,28 +1711,30 @@ public class FluxSwitchOnFirstTest {
     @Test
     public void onCompleteAndRequestRacingTest() {
         Long signal = 1L;
-        Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain>[] factories = new Function[] {
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstMain((CoreSubscriber)assertSubscriber, (s, f) -> f, true),
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain((Fuseable.ConditionalSubscriber) assertSubscriber, (s, f) -> f, true)
-        };
-        for (Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain> factory : factories) {
+        @SuppressWarnings("unchecked")
+        Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>>[] factories = new Function[2];
+        factories[0] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstMain<>(assertSubscriber, (s, f) -> f, true);
+        factories[1] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain<>((Fuseable.ConditionalSubscriber<Object>) assertSubscriber, (s, f) -> f, true);
+
+        for (Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>> factory : factories) {
             for (int i = 0; i < 1000; i++) {
                 Subscription mockSubscription = Mockito.mock(Subscription.class);
                 ArgumentCaptor<Long> requestCaptor = ArgumentCaptor.forClass(Long.class);
                 Mockito.doNothing().when(mockSubscription).request(requestCaptor.capture());
                 Mockito.doNothing().when(mockSubscription).cancel();
                 AssertSubscriber<Object> assertSubscriber = AssertSubscriber.create(0);
-                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(Operators.toConditionalSubscriber(assertSubscriber));
+                CoreSubscriber<? super Object> conditionalAssert = Operators.toConditionalSubscriber(assertSubscriber);
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(conditionalAssert);
 
                 switchOnFirstMain.onSubscribe(mockSubscription);
                 Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(1L)));
                 Mockito.clearInvocations(mockSubscription);
                 switchOnFirstMain.onNext(signal);
                 RaceTestUtils.race(() -> switchOnFirstMain.onComplete(), () -> switchOnFirstMain.request(55));
-                Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(54L)));
+                Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(54L) || argument.equals(55L)));
                 assertSubscriber.assertSubscribed()
                         .awaitAndAssertNextValues(signal)
-                        .await()
+                        .await(Duration.ofSeconds(5))
                         .assertComplete();
             }
         }
@@ -1515,49 +1744,54 @@ public class FluxSwitchOnFirstTest {
     public void onErrorAndRequestRacingTest() {
         Long signal = 1L;
         RuntimeException ex = new RuntimeException();
-        Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain>[] factories = new Function[] {
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstMain((CoreSubscriber)assertSubscriber, (s, f) -> f, true),
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain((Fuseable.ConditionalSubscriber) assertSubscriber, (s, f) -> f, true)
-        };
-        for (Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain> factory : factories) {
+        @SuppressWarnings("unchecked")
+        Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>>[] factories = new Function[2];
+        factories[0] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstMain<>(assertSubscriber, (s, f) -> f, true);
+        factories[1] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain<>((Fuseable.ConditionalSubscriber<Object>) assertSubscriber, (s, f) -> f, true);
+
+        for (Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object,Object>> factory : factories) {
             for (int i = 0; i < 1000; i++) {
                 Subscription mockSubscription = Mockito.mock(Subscription.class);
                 ArgumentCaptor<Long> requestCaptor = ArgumentCaptor.forClass(Long.class);
                 Mockito.doNothing().when(mockSubscription).request(requestCaptor.capture());
                 Mockito.doNothing().when(mockSubscription).cancel();
                 AssertSubscriber<Object> assertSubscriber = AssertSubscriber.create(0);
-                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(Operators.toConditionalSubscriber(assertSubscriber));
+                CoreSubscriber<? super Object> conditionalAssert = Operators.toConditionalSubscriber(assertSubscriber);
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(conditionalAssert);
 
                 switchOnFirstMain.onSubscribe(mockSubscription);
                 Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(1L)));
                 Mockito.clearInvocations(mockSubscription);
                 switchOnFirstMain.onNext(signal);
                 RaceTestUtils.race(() -> switchOnFirstMain.onError(ex), () -> switchOnFirstMain.request(55));
-                Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(54L)));
+                Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(54L) || argument.equals(55L)));
                 assertSubscriber.assertSubscribed()
-                        .awaitAndAssertNextValues(signal)
-                        .await()
-                        .assertErrorWith(t -> Assertions.assertThat(t).isEqualTo(ex));
+                                .awaitAndAssertNextValues(signal)
+                                .await(Duration.ofSeconds(5))
+                                .assertErrorWith(t -> Assertions.assertThat(t).isEqualTo(ex));
             }
         }
     }
 
     @Test
-    public void сancelAndRequestRacingWithOnCompleteAfterTest() {
+    public void cancelAndRequestRacingWithOnCompleteAfterTest() {
         Long signal = 1L;
-        Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain>[] factories = new Function[] {
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstMain((CoreSubscriber)assertSubscriber, (s, f) -> f, true),
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain((Fuseable.ConditionalSubscriber) assertSubscriber, (s, f) -> f, true)
-        };
-        for (Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain> factory : factories){
+        @SuppressWarnings("unchecked")
+        Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>>[] factories = new Function[2];
+        factories[0] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstMain<>(assertSubscriber, (s, f) -> f, true);
+        factories[1] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain<>((Fuseable.ConditionalSubscriber<Object>) assertSubscriber, (s, f) -> f, true);
+
+        for (Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>> factory : factories){
             for (int i = 0; i < 1000; i++) {
                 Subscription mockSubscription = Mockito.mock(Subscription.class);
                 ArgumentCaptor<Long> requestCaptor = ArgumentCaptor.forClass(Long.class);
                 AtomicReference<Object> discarded = new AtomicReference<>();
                 Mockito.doNothing().when(mockSubscription).request(requestCaptor.capture());
                 Mockito.doNothing().when(mockSubscription).cancel();
-                AssertSubscriber assertSubscriber = new AssertSubscriber<>(Context.of(Hooks.KEY_ON_DISCARD, (Consumer<Object>) o -> Assertions.assertThat(discarded.getAndSet(o)).isNull()), 0L);
-                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(Operators.toConditionalSubscriber(assertSubscriber));
+                AssertSubscriber<Object> assertSubscriber = new AssertSubscriber<>(Context.of(Hooks.KEY_ON_DISCARD, (Consumer<Object>) o -> Assertions.assertThat(discarded.getAndSet(o)).isNull()), 0L);
+
+                Fuseable.ConditionalSubscriber<? super Object> assertConditional = Operators.toConditionalSubscriber(assertSubscriber);
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(assertConditional);
 
                 switchOnFirstMain.onSubscribe(mockSubscription);
                 Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(1L)));
@@ -1581,11 +1815,12 @@ public class FluxSwitchOnFirstTest {
     @Test
     public void cancelAndRequestRacingOnErrorAfterTest() {
         Long signal = 1L;
-        Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain>[] factories = new Function[] {
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstMain((CoreSubscriber)assertSubscriber, (s, f) -> f, true),
-                (assertSubscriber) -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain((Fuseable.ConditionalSubscriber) assertSubscriber, (s, f) -> f, true)
-        };
-        for (Function<CoreSubscriber, FluxSwitchOnFirst.AbstractSwitchOnFirstMain> factory : factories) {
+        @SuppressWarnings("unchecked")
+        Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>>[] factories = new Function[2];
+        factories[0] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstMain<>(assertSubscriber, (s, f) -> f, true);
+        factories[1] = assertSubscriber -> new FluxSwitchOnFirst.SwitchOnFirstConditionalMain<>((Fuseable.ConditionalSubscriber<Object>) assertSubscriber, (s, f) -> f, true);
+
+        for (Function<CoreSubscriber<Object>, FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object>> factory : factories) {
             for (int i = 0; i < 1000; i++) {
                 Subscription mockSubscription = Mockito.mock(Subscription.class);
                 ArgumentCaptor<Long> requestCaptor = ArgumentCaptor.forClass(Long.class);
@@ -1597,7 +1832,9 @@ public class FluxSwitchOnFirstTest {
                         Hooks.KEY_ON_DISCARD, (Consumer<Object>) o -> Assertions.assertThat(discarded.getAndSet(o)).isNull(),
                         Hooks.KEY_ON_ERROR_DROPPED, (Consumer<Object>) o -> Assertions.assertThat(discardedError.getAndSet(o)).isNull()
                 ), 0L);
-                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(Operators.toConditionalSubscriber(assertSubscriber));
+                CoreSubscriber<? super Object> conditionalAssert = Operators.toConditionalSubscriber(assertSubscriber);
+                FluxSwitchOnFirst.AbstractSwitchOnFirstMain<Object, Object> switchOnFirstMain = factory.apply(conditionalAssert);
+
 
                 switchOnFirstMain.onSubscribe(mockSubscription);
                 Mockito.verify(mockSubscription).request(Mockito.longThat(argument -> argument.equals(1L)));

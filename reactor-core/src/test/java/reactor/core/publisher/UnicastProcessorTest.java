@@ -15,25 +15,35 @@
  */
 package reactor.core.publisher;
 
+import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 
+import org.assertj.core.api.Assumptions;
 import org.junit.Test;
+import org.reactivestreams.Publisher;
 import reactor.core.CoreSubscriber;
 import reactor.core.Disposable;
+import reactor.core.Fuseable;
+import reactor.core.Scannable;
+import reactor.test.MemoryUtils;
 import reactor.test.StepVerifier;
+import reactor.test.publisher.TestPublisher;
 import reactor.test.subscriber.AssertSubscriber;
+import reactor.test.util.RaceTestUtils;
 import reactor.util.annotation.Nullable;
 import reactor.util.concurrent.Queues;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertEquals;
 
+@SuppressWarnings("deprecation")
 public class UnicastProcessorTest {
 
     @Test
@@ -179,7 +189,7 @@ public class UnicastProcessorTest {
 	}
 
 	@Test
-	public void subscriptionCancelNullifiesActual() {
+	public void subscriptionCancelUpdatesDownstreamCount() {
 		UnicastProcessor<String> processor = UnicastProcessor.create();
 
 		assertThat(processor.downstreamCount())
@@ -193,7 +203,7 @@ public class UnicastProcessorTest {
 				.as("after subscribe")
 				.isEqualTo(1);
 		assertThat(processor.actual())
-				.as("after subscribe")
+				.as("after subscribe has actual")
 				.isSameAs(subscriber);
 
 		subscription.dispose();
@@ -201,8 +211,50 @@ public class UnicastProcessorTest {
 		assertThat(processor.downstreamCount())
 				.as("after subscription cancel")
 				.isZero();
-		assertThat(processor.actual())
-				.as("after subscription cancel")
-				.isNull();
+	}
+
+	@Test
+	public void ensureNoLeaksIfRacingDisposeAndOnNext() {
+		Hooks.onNextDropped(MemoryUtils.Tracked::safeRelease);
+		try {
+			MemoryUtils.OffHeapDetector tracker = new MemoryUtils.OffHeapDetector();
+			for (int i = 0; i < 10000; i++) {
+				tracker.reset();
+				TestPublisher<MemoryUtils.Tracked> testPublisher = TestPublisher.createNoncompliant(TestPublisher.Violation.DEFER_CANCELLATION,
+						TestPublisher.Violation.REQUEST_OVERFLOW);
+				UnicastProcessor<MemoryUtils.Tracked> unicastProcessor = UnicastProcessor.create();
+
+				testPublisher.subscribe(unicastProcessor);
+
+				AssertSubscriber<MemoryUtils.Tracked> assertSubscriber =
+						new AssertSubscriber<>(Operators.enableOnDiscard(null, MemoryUtils.Tracked::safeRelease));
+
+				unicastProcessor.subscribe(assertSubscriber);
+
+				testPublisher.next(tracker.track(1));
+				testPublisher.next(tracker.track(2));
+
+				MemoryUtils.Tracked value3 = tracker.track(3);
+				MemoryUtils.Tracked value4 = tracker.track(4);
+				MemoryUtils.Tracked value5 = tracker.track(5);
+
+				RaceTestUtils.race(unicastProcessor::dispose, () -> {
+					testPublisher.next(value3);
+					testPublisher.next(value4);
+					testPublisher.next(value5);
+				});
+
+				assertSubscriber.assertTerminated()
+				                .assertError(CancellationException.class)
+				                .assertErrorMessage("Disposed");
+
+				List<MemoryUtils.Tracked> values = assertSubscriber.values();
+				values.forEach(MemoryUtils.Tracked::release);
+
+				tracker.assertNoLeaks();
+			}
+		} finally {
+			Hooks.resetOnNextDropped();
+		}
 	}
 }
